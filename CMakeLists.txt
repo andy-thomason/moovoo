@@ -1,6 +1,6 @@
 cmake_minimum_required (VERSION 3.1.0)
 
-project(VookooExamples)
+project(moovoo)
 
 include_directories(${PROJECT_SOURCE_DIR}/external)
 link_directories(${PROJECT_SOURCE_DIR}/external/GLFW)

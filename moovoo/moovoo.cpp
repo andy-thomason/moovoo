@@ -636,14 +636,31 @@ private:
     if (mouseState_.rotating) {
       float dx = float(xpos - mouseState_.prevXpos);
       float dy = float(ypos - mouseState_.prevYpos);
+      float dz = 0;
       float xspeed = 0.1f;
       float yspeed = 0.1f;
+      float zspeed = 0.2f;
+      float halfw = window_.width() * 0.5f;
+      float halfh = window_.height() * 0.5f;
+      float thresh = std::min(halfh, halfw) * 0.8f;
+      float rx = float(xpos) - halfw;
+      float ry = float(ypos) - halfh;
+      float r = std::sqrt(rx*rx + ry*ry);
+      float speed = std::sqrt(dx*dx + dy*dy);
+      if (r - thresh > 0 && speed > 0) {
+        float tail = std::min((r - thresh) * (2.0f / thresh), 1.0f);
+        xspeed *= (1.0f - tail);
+        yspeed *= (1.0f - tail);
+        dz = (dx * ry - dy * rx) * zspeed * tail / std::sqrt(rx*rx + ry*ry);
+      }
       glm::mat4 worldToModel = glm::inverse(moleculeState_.modelToWorld);
       glm::vec3 xaxis = worldToModel[0];
       glm::vec3 yaxis = worldToModel[1];
+      glm::vec3 zaxis = worldToModel[2];
       auto &mat = moleculeState_.modelToWorld;
       mat = glm::rotate(mat, glm::radians(dy * yspeed), xaxis);
       mat = glm::rotate(mat, glm::radians(dx * xspeed), yaxis);
+      mat = glm::rotate(mat, glm::radians(dz), zaxis);
       mouseState_.prevXpos = xpos;
       mouseState_.prevYpos = ypos;
     }    
@@ -863,7 +880,7 @@ private:
     auto &cam = app.cameraState_.cameraRotation;
 
     // move the molecule along the camera x and y axis.
-    if (action != GLFW_PRESS) return;
+    if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
 
     switch (key) {
       case GLFW_KEY_W: {
