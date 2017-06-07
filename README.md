@@ -5,18 +5,30 @@ About
 =====
 
 Moovoo is a Vulkan and C++ molecule editor that give you millions of ray-traced atoms and
-connections, ultra fast load times. It is still early days yet and we are seeking sponsors
-to continue the development.
+connections, ultra fast load times. 
+
+I am currently conducting a survey of people who use structural biology tools to see what
+kind of problems they solve and whether we can create better tools using modern methodologies
+such as GPU compute and machine learning to play with very large structures of atoms
+beyond the scale of rhibosomes such as DNA and RNA structure.
+
+There is some basic infrastructural work to be done to provide the core functionality
+of legacy tools such as PyMol.
+
+Please send me your data if possible, especially very complex structures that are
+difficult to render using existing software.
 
 On the schedule is:
 
     Web-based thin client editing for VR and mobile.
-    A scripting system similar to Pymol.
+    A scripting system.
     Ability to stretch and pull chains.
     Tools for folding RNA, DNA and protiens.
     Tools for docking RNA, DNA and protiens.
     Real-time movie generation.
     Visualisation of contact maps.
+    Javascript, R and Python bindings.
+    Direct access to the PDB databank via the REST api.
 
 Everything in Moovoo is real-time given a decent graphics card and plenty of RAM.
 Vulkan supports multithreaded rendering, GPU compute, high performance mobile
@@ -27,7 +39,8 @@ at 30fps.
 
 The application is a single module C++ build which should take less than a couple
 of seconds and has all its own dependencies and so should build out of the box
-given a Vulkan SDK install from LunarG.
+given a Vulkan SDK install from LunarG. What is more it has comments and meaningful
+variable names.
 
 It should run on Windows, Linux, Android and Apple devices.
 
