@@ -16,6 +16,7 @@
 #include <glm/ext.hpp>
 
 #include <gilgamesh/mesh.hpp>
+#include <gilgamesh/distance_field.hpp>
 #include <gilgamesh/decoders/pdb_decoder.hpp>
 #include <vector>
 
@@ -118,19 +119,17 @@ private:
   vk::UniquePipelineLayout pipelineLayout_;
 };
 
-class MoleculePipeline {
+class GraphicsPipeline {
 public:
-  MoleculePipeline() {
+  GraphicsPipeline() {
   }
 
-  MoleculePipeline(vk::Device device, vk::PipelineCache cache, vk::RenderPass renderPass, uint32_t width, uint32_t height, vk::PipelineLayout pipelineLayout, bool isAtoms) {
-    if (isAtoms) {
-      vert_ = vku::ShaderModule{device, BINARY_DIR "atoms.vert.spv"};
-      frag_ = vku::ShaderModule{device, BINARY_DIR "atoms.frag.spv"};
-    } else {
-      vert_ = vku::ShaderModule{device, BINARY_DIR "conns.vert.spv"};
-      frag_ = vku::ShaderModule{device, BINARY_DIR "conns.frag.spv"};
-    }
+  GraphicsPipeline(
+    vk::Device device, vk::PipelineCache cache, vk::RenderPass renderPass, uint32_t width, uint32_t height, vk::PipelineLayout pipelineLayout,
+    const std::string &vertshader, const std::string &fragshader
+  ) {
+    vert_ = vku::ShaderModule{device, vertshader};
+    frag_ = vku::ShaderModule{device, fragshader};
 
     vku::PipelineMaker pm{width, height};
     pm.shader(vk::ShaderStageFlagBits::eVertex, vert_);
@@ -140,23 +139,14 @@ public:
     pipeline_ = pm.createUnique(device, cache, pipelineLayout, renderPass);
   }
 
-  vk::Pipeline pipeline() const { return *pipeline_; }
-private:
-  vk::UniquePipeline pipeline_;
-  vku::ShaderModule vert_;
-  vku::ShaderModule frag_;
-};
+  GraphicsPipeline(
+    vk::Device device, vk::PipelineCache cache, vk::RenderPass renderPass, vk::PipelineLayout pipelineLayout,
+    const std::string &vertshader, const std::string &fragshader,
+    vku::PipelineMaker pm
+  ) {
+    vert_ = vku::ShaderModule{device, vertshader};
+    frag_ = vku::ShaderModule{device, fragshader};
 
-class SkyboxPipeline {
-public:
-  SkyboxPipeline() {
-  }
-
-  SkyboxPipeline(vk::Device device, vk::PipelineCache cache, vk::RenderPass renderPass, uint32_t width, uint32_t height, vk::PipelineLayout pipelineLayout) {
-    vert_ = vku::ShaderModule{device, BINARY_DIR "skybox.vert.spv"};
-    frag_ = vku::ShaderModule{device, BINARY_DIR "skybox.frag.spv"};
-
-    vku::PipelineMaker pm{width, height};
     pm.shader(vk::ShaderStageFlagBits::eVertex, vert_);
     pm.shader(vk::ShaderStageFlagBits::eFragment, frag_);
 
@@ -203,7 +193,6 @@ public:
   }
 
   DynamicsPipeline(vk::Device device, vk::PipelineCache cache, vk::RenderPass renderPass, uint32_t width, uint32_t height, vk::PipelineLayout pipelineLayout) {
-  //DynamicsPipeline(vk::Device device, vk::CommandPool commandPool, vk::Queue queue, vk::DescriptorPool descriptorPool, vk::PipelineCache cache, vk::PhysicalDeviceMemoryProperties memprops, vk::RenderPass renderPass, uint32_t width, uint32_t height, int numImageIndices, vk::PipelineLayout pipelineLayout) {
     comp_ = vku::ShaderModule{device, BINARY_DIR "dynamics.comp.spv"};
 
     vku::ComputePipelineMaker cpm{};
@@ -311,12 +300,19 @@ public:
     pdbAtoms_ = pdb_.atoms(chains);
 
     glm::vec3 mean(0);
+    glm::vec3 min(1e38f);
+    glm::vec3 max(-1e38f);
     for (auto &atom : pdbAtoms_) {
-      mean += atom.pos();
+      glm::vec3 pos = atom.pos();
+      min = glm::min(min, pos);
+      max = glm::max(max, pos);
+      mean += pos;
     }
     mean /= (float)pdbAtoms_.size();
 
     std::vector<Atom> atoms;
+    std::vector<glm::vec3> pos;
+    std::vector<float> radii;
     for (auto &atom : pdbAtoms_) {
       glm::vec3 colour = atom.colorByElement();
       colour.r = colour.r * 0.75f + 0.25f;
@@ -324,9 +320,11 @@ public:
       colour.b = colour.b * 0.75f + 0.25f;
       Atom a{};
       a.pos = a.prevPos = atom.pos() - mean;
+      pos.push_back(a.pos);
       float scale = 0.1f;
       if (atom.atomNameIs("N") || atom.atomNameIs("CA") || atom.atomNameIs("C") || atom.atomNameIs("P")) scale = 0.4f;
       float radius = atom.vanDerVaalsRadius();
+      radii.push_back(radius);
       a.radius = radius * scale;
       a.colour = colour;
       a.acc = glm::vec3(0, 0, 0);
@@ -334,6 +332,15 @@ public:
       std::fill(std::begin(a.connections), std::end(a.connections), -1);
       atoms.push_back(a);
     }
+
+    min -= mean;
+    max -= mean;
+    glm::vec3 extent = max - min;
+    float grid_spacing = 1.0f;
+    int xdim = int(extent.x / grid_spacing) + 1;
+    int ydim = int(extent.y / grid_spacing) + 1;
+    int zdim = int(extent.z / grid_spacing) + 1;
+    gilgamesh::distance_field df(xdim, ydim, zdim, grid_spacing, min, pos, radii);
 
     std::vector<std::pair<int, int>> pairs;
     int prevC = -1;
@@ -531,7 +538,8 @@ private:
 
     if (!filename) {
       //filename = SOURCE_DIR "molecules/1hnw.pdb";
-      filename = SOURCE_DIR "molecules/5dge.cif";
+      //filename = SOURCE_DIR "molecules/5dge.cif";
+      filename = SOURCE_DIR "molecules/2tgt.cif";
     }
 
     glfwInit();
@@ -589,11 +597,24 @@ private:
 
     standardLayout_ = StandardLayout(device_);
 
-    fountPipeline_ = FountPipeline(device_, fw_.pipelineCache(), window_.renderPass(), window_.width(), window_.height(), standardLayout_.pipelineLayout());
-    skyboxPipeline_ = SkyboxPipeline(device_, fw_.pipelineCache(), window_.renderPass(), window_.width(), window_.height(), standardLayout_.pipelineLayout());
     dynamicsPipeline_ = DynamicsPipeline(device_, fw_.pipelineCache(), window_.renderPass(), window_.width(), window_.height(), standardLayout_.pipelineLayout());
-    atomPipeline_ = MoleculePipeline(device_, fw_.pipelineCache(), window_.renderPass(), window_.width(), window_.height(), standardLayout_.pipelineLayout(), true);
-    connPipeline_ = MoleculePipeline(device_, fw_.pipelineCache(), window_.renderPass(), window_.width(), window_.height(), standardLayout_.pipelineLayout(), false);
+
+    fountPipeline_ = FountPipeline(device_, fw_.pipelineCache(), window_.renderPass(), window_.width(), window_.height(), standardLayout_.pipelineLayout());
+
+    skyboxPipeline_ = GraphicsPipeline(
+      device_, fw_.pipelineCache(), window_.renderPass(), window_.width(), window_.height(), standardLayout_.pipelineLayout(),
+      BINARY_DIR "skybox.vert.spv",  BINARY_DIR "skybox.frag.spv"
+    );
+
+    atomPipeline_ = GraphicsPipeline(
+      device_, fw_.pipelineCache(), window_.renderPass(), window_.width(), window_.height(), standardLayout_.pipelineLayout(),
+      BINARY_DIR "atoms.vert.spv",  BINARY_DIR "atoms.frag.spv"
+    );
+
+    connPipeline_ = GraphicsPipeline(
+      device_, fw_.pipelineCache(), window_.renderPass(), window_.width(), window_.height(), standardLayout_.pipelineLayout(),
+      BINARY_DIR "conns.vert.spv",  BINARY_DIR "conns.frag.spv"
+    );
 
     textModel_ = TextModel(FOUNT_NAME, device_, fw_.memprops(), window_.commandPool(), fw_.graphicsQueue());
     //textModel_.draw(vec3(0), vec2(0), vec3(0, 0, 1), vec2(0.1f), "hello world");
@@ -633,6 +654,7 @@ private:
     double xpos, ypos;
     glfwGetCursorPos(glfwwindow_, &xpos, &ypos);
 
+    // Trackball rotation.
     if (mouseState_.rotating) {
       float dx = float(xpos - mouseState_.prevXpos);
       float dy = float(ypos - mouseState_.prevYpos);
@@ -647,11 +669,13 @@ private:
       float ry = float(ypos) - halfh;
       float r = std::sqrt(rx*rx + ry*ry);
       float speed = std::sqrt(dx*dx + dy*dy);
+
+      // Z rotation when outside inner circle
       if (r - thresh > 0 && speed > 0) {
         float tail = std::min((r - thresh) * (2.0f / thresh), 1.0f);
-        xspeed *= (1.0f - tail);
-        yspeed *= (1.0f - tail);
-        dz = (dx * ry - dy * rx) * zspeed * tail / std::sqrt(rx*rx + ry*ry);
+        dz = (dx * ry - dy * rx) * tail / std::sqrt(rx*rx + ry*ry);
+        dx *= (1.0f - tail);
+        dy *= (1.0f - tail);
       }
       glm::mat4 worldToModel = glm::inverse(moleculeState_.modelToWorld);
       glm::vec3 xaxis = worldToModel[0];
@@ -660,7 +684,7 @@ private:
       auto &mat = moleculeState_.modelToWorld;
       mat = glm::rotate(mat, glm::radians(dy * yspeed), xaxis);
       mat = glm::rotate(mat, glm::radians(dx * xspeed), yaxis);
-      mat = glm::rotate(mat, glm::radians(dz), zaxis);
+      mat = glm::rotate(mat, glm::radians(dz * zspeed), zaxis);
       mouseState_.prevXpos = xpos;
       mouseState_.prevYpos = ypos;
     }    
@@ -946,12 +970,13 @@ private:
   vku::Window  window_;
 
   StandardLayout standardLayout_;
-  SkyboxPipeline skyboxPipeline_;
   FountPipeline fountPipeline_;
 
   DynamicsPipeline dynamicsPipeline_;
-  MoleculePipeline atomPipeline_;
-  MoleculePipeline connPipeline_;
+
+  GraphicsPipeline atomPipeline_;
+  GraphicsPipeline connPipeline_;
+  GraphicsPipeline skyboxPipeline_;
 
   TextModel textModel_;
   MoleculeModel moleculeModel_;

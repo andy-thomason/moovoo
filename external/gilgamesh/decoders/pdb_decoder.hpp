@@ -792,7 +792,6 @@ namespace gilgamesh {
     }
 
     void cif_data(const uint8_t *b, const uint8_t *e) {
-      std::cout << std::string(b, e) << "D\n";
     }
 
     void cif_value(const uint8_t *b, const uint8_t *e) {
