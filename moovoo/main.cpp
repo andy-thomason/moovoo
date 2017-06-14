@@ -8,6 +8,9 @@
 #include <Python.h>
 #include <vku/vku.hpp>
 
+#define VKU_NO_WINDOW
+#include <vku/vku_framework.hpp>
+
 #include <glm/glm.hpp>
 
 //#define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -18,6 +21,7 @@
 #include <gilgamesh/distance_field.hpp>
 #include <gilgamesh/decoders/pdb_decoder.hpp>
 #include <vector>
+#include <boost/python.hpp>
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb/stb_truetype.h>
@@ -1060,25 +1064,55 @@ private:
 
 #endif
 
-static PyMethodDef methods[] = {
-    //{"system",  spam_system, METH_VARARGS, "Execute a shell command."},
-    {NULL, NULL, 0, NULL}
+class Instance {
+public:
+  Instance() {
+    fw_ = vku::Framework{"moovoo"};
+    if (!fw_.ok()) {
+      throw std::runtime_error("Vulkan framework creation failed");
+    }
+
+    device_ = fw_.device();
+  }
+
+  Instance(const Instance &rhs) {}
+private:
+  vku::Framework fw_;
+  vk::Device device_;
 };
 
-static struct PyModuleDef spammodule = {
-  PyModuleDef_HEAD_INIT,
-  "moovoo",   /* name of module */
-  nullptr, /* module documentation, may be NULL */
-  -1,       /* size of per-interpreter state of the module,
-               or -1 if the module keeps state in global variables. */
-  methods
+class Model {
+public:
+  Model() {}
+  Model(const std::string &filename) {
+  }
+
+  Model(const Model &rhs) {}
+private:
 };
 
-PyMODINIT_FUNC
-PyInit_moovoo(void)
+class View {
+public:
+  View() {}
+  View(Instance &instance, int width, int height) {
+    printf("%dx%d\n", width, height);
+  }
+
+  View(const View &rhs) {}
+private:
+};
+
+
+BOOST_PYTHON_MODULE(moovoo)
 {
-  printf("hello\n");
-  return PyModule_Create(&spammodule);
+  using namespace boost::python;
+  class_<Instance>("Instance", init<>())
+    //.def("greet", &World::greet)
+    //.def("set", &World::set)
+  ;
+  class_<View>("View", init<Instance &, int, int>())
+    //.def("greet", &World::greet)
+    //.def("set", &World::set)
+  ;
 }
-
 

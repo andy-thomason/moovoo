@@ -2,12 +2,13 @@ import os
 import sys
 import ssl
 import urllib
-import http.server
+#import http.server
 
 import moovoo
 
 #inst = moovoo.Instance()
 
+"""
 with open("1.jpg", "rb") as f1:
   j1 = f1.read()
 
@@ -59,4 +60,5 @@ if __name__ == "__main__":
 
 
 
+"""
 

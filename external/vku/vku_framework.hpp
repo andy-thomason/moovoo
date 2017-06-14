@@ -11,6 +11,7 @@
 #ifndef VKU_FRAMEWORK_HPP
 #define VKU_FRAMEWORK_HPP
 
+#ifndef VKU_NO_WINDOW
 #ifdef WIN32
 #define VK_USE_PLATFORM_WIN32_KHR
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -20,6 +21,7 @@
 #define VK_USE_PLATFORM_XLIB_KHR
 #define GLFW_EXPOSE_NATIVE_X11
 #define VKU_SURFACE "VK_KHR_xlib_surface"
+#endif
 #endif
 
 #define GLFW_INCLUDE_VULKAN
@@ -63,8 +65,10 @@ public:
 
     std::vector<const char *> instance_extensions;
     instance_extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-    instance_extensions.push_back(VKU_SURFACE);
-    instance_extensions.push_back("VK_KHR_surface");
+    #ifndef VKU_NO_WINDOW
+      instance_extensions.push_back(VKU_SURFACE);
+      instance_extensions.push_back("VK_KHR_surface");
+    #endif
 
     auto appinfo = vk::ApplicationInfo{};
     instance_ = vk::createInstanceUnique(vk::InstanceCreateInfo{
@@ -259,6 +263,7 @@ private:
   bool ok_ = false;
 };
 
+#ifndef VK_NO_WINDOW
 /// This class wraps a window, a surface and a swap chain for that surface.
 class Window {
 public:
@@ -630,6 +635,8 @@ private:
   vk::Device device_;
   bool ok_;
 };
+
+#endif // VK_NO_WINDOW
 
 } // namespace vku
 
