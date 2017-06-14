@@ -2,11 +2,10 @@
 //
 // (C) Andy Thomason 2017
 //
-// Molvoo: a Vulkan molecule explorer
+// Moovoo: a Vulkan molecule explorer
 //
 
-
-#include <vku/vku_framework.hpp>
+#include <Python.h>
 #include <vku/vku.hpp>
 
 #include <glm/glm.hpp>
@@ -29,6 +28,7 @@
 #define FOUNT_NAME "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 #endif
 
+#if 0
 namespace molvoo {
 
 using mat4 = glm::mat4;
@@ -538,15 +538,15 @@ private:
   Atom *pAtoms_;
 };
 
-class Molvoo {
+class Moovoo {
 public:
-  Molvoo(int argc, char **argv) {
+  Moovoo(int argc, char **argv) {
     init(argc, argv);
   }
 
   bool poll() { return doPoll(); }
 
-  ~Molvoo() {
+  ~Moovoo() {
     device_.waitIdle();
     glfwDestroyWindow(glfwwindow_);
     glfwTerminate();
@@ -847,12 +847,12 @@ private:
   }
 
   static void scrollHandler(GLFWwindow *window, double dx, double dy) {
-    Molvoo &app = *(Molvoo*)glfwGetWindowUserPointer(window);
+    Moovoo &app = *(Moovoo*)glfwGetWindowUserPointer(window);
     app.cameraState_.cameraDistance -= (float)dy * 4.0f;
   }
 
   static void mouseButtonHandlerHook(GLFWwindow *window, int button, int action, int mods) {
-    Molvoo &app = *(Molvoo*)glfwGetWindowUserPointer(window);
+    Moovoo &app = *(Moovoo*)glfwGetWindowUserPointer(window);
     app.mouseButtonHandler(window, button, action, mods);
   }
 
@@ -935,7 +935,7 @@ private:
   }
 
   static void keyHandler(GLFWwindow *window, int key, int scancode, int action, int mods) {
-    Molvoo &app = *(Molvoo*)glfwGetWindowUserPointer(window);
+    Moovoo &app = *(Moovoo*)glfwGetWindowUserPointer(window);
     auto &pos = app.moleculeState_.modelToWorld[3];
     auto &cam = app.cameraState_.cameraRotation;
 
@@ -1058,9 +1058,27 @@ private:
 
 }
 
-int main(int argc, char **argv) {
-  molvoo::Molvoo viewer(argc, argv);
-  while (viewer.poll()) {
-  }
-  return 0;
+#endif
+
+static PyMethodDef methods[] = {
+    //{"system",  spam_system, METH_VARARGS, "Execute a shell command."},
+    {NULL, NULL, 0, NULL}
+};
+
+static struct PyModuleDef spammodule = {
+  PyModuleDef_HEAD_INIT,
+  "moovoo",   /* name of module */
+  nullptr, /* module documentation, may be NULL */
+  -1,       /* size of per-interpreter state of the module,
+               or -1 if the module keeps state in global variables. */
+  methods
+};
+
+PyMODINIT_FUNC
+PyInit_moovoo(void)
+{
+  printf("hello\n");
+  return PyModule_Create(&spammodule);
 }
+
+
