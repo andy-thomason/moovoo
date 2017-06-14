@@ -104,6 +104,7 @@ public:
     dslm.buffer(4U, vk::DescriptorType::eCombinedImageSampler, vk::ShaderStageFlagBits::eAll, 1); // Cube map
     dslm.buffer(5U, vk::DescriptorType::eCombinedImageSampler, vk::ShaderStageFlagBits::eAll, 1); // Fount map
     dslm.buffer(6U, vk::DescriptorType::eStorageBuffer, vk::ShaderStageFlagBits::eAll, 1); // Instances
+    //dslm.buffer(7U, vk::DescriptorType::eStorageBuffer, vk::ShaderStageFlagBits::eAll, 1); // Solvent Acessible
     layout_ = dslm.createUnique(device);
 
     vku::PipelineLayoutMaker plm{};
@@ -342,6 +343,36 @@ public:
     int zdim = int(extent.z / grid_spacing) + 1;
     gilgamesh::distance_field df(xdim, ydim, zdim, grid_spacing, min, pos, radii);
 
+    auto &distance = df.distances();
+
+    auto idx = [xdim, ydim, zdim](int x, int y, int z) { return (z * ydim + y) + xdim + x; };
+
+    /*std::vector<glm::vec3> solventAcessible;
+    for (int z = 0; z != zdim; ++z) {
+      for (int y = 0; y != ydim; ++y) {
+        for (int x = 0; x != xdim; ++x) {
+          int i = idx(x, y, z);
+          float d000 = distance[i];
+          float d100 = distance[i + idx(1, 0, 0)];
+          float d010 = distance[i + idx(0, 1, 0)];
+          float d001 = distance[i + idx(0, 0, 1)];
+          glm::vec3 pos = min + glm::vec3(x, y, z) * grid_spacing;
+          if (d000 * d100 < 0) {
+            float d = grid_spacing + d000 / (d000 - d100);
+            solventAcessible.push_back(glm::vec3(pos.x + d, pos.y, pos.z));
+          }
+          if (d000 * d010 < 0) {
+            float d = grid_spacing + d000 / (d000 - d010);
+            solventAcessible.push_back(glm::vec3(pos.x, pos.y + d, pos.z));
+          }
+          if (d000 * d001 < 0) {
+            float d = grid_spacing + d000 / (d000 - d001);
+            solventAcessible.push_back(glm::vec3(pos.x, pos.y, pos.z + d));
+          }
+        }
+      }
+    }*/
+
     std::vector<std::pair<int, int>> pairs;
     int prevC = -1;
     char prevChainID = '?';
@@ -443,10 +474,12 @@ public:
     pick_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer, sizeof(Pick) * Pick::fifoSize, vk::MemoryPropertyFlagBits::eHostVisible);
     conns_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(Connection) * (numConnections_+1), vk::MemoryPropertyFlagBits::eHostVisible);
     instances_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(Instance) * numInstances_, vk::MemoryPropertyFlagBits::eHostVisible);
+    //solventAcessible_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(glm::vec3) * solventAcessible.size(), vk::MemoryPropertyFlagBits::eHostVisible);
 
     atoms_.upload(device, memprops, commandPool, queue, atoms);
     conns_.upload(device, memprops, commandPool, queue, conns);
     instances_.upload(device, memprops, commandPool, queue, instances);
+    //solventAcessible_.upload(device, memprops, commandPool, queue, solventAcessible);
     pAtoms_ = (Atom*)atoms_.map(device);
   }
 
@@ -474,6 +507,8 @@ public:
     update.image(fountSampler, fountImageView, vk::ImageLayout::eShaderReadOnlyOptimal);
     update.beginBuffers(6, 0, vk::DescriptorType::eStorageBuffer);
     update.buffer(instances_.buffer(), 0, numInstances_ * sizeof(Instance));
+    //update.beginBuffers(7, 0, vk::DescriptorType::eStorageBuffer);
+    //update.buffer(solventAcessible_.buffer(), 0, solventAcessible_.size());
 
     update.update(device);
   }
@@ -495,6 +530,7 @@ private:
   vku::GenericBuffer pick_;
   vku::GenericBuffer conns_;
   vku::GenericBuffer instances_;
+  vku::GenericBuffer solventAcessible_;
   vk::DescriptorSet descriptorSet_;
   gilgamesh::pdb_decoder pdb_;
   std::vector<uint8_t> pdb_text_;
