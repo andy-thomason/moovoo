@@ -1084,11 +1084,26 @@ private:
 class Model {
 public:
   Model() {}
-  Model(const std::string &filename) {
+  Model(Instance &, boost::python::object bytes) {
+    Py_buffer pybuf;
+    if (PyObject_GetBuffer(bytes.ptr(), &pybuf, PyBUF_SIMPLE) < 0) {
+      throw std::runtime_error("Model expects buffer object");
+    }
+
+    const uint8_t *b = (const uint8_t *)pybuf.buf;
+    const uint8_t *e = b + pybuf.len;
+    pdb_ = gilgamesh::pdb_decoder(b, e);
+    PyBuffer_Release(&pybuf);
+
+    std::cout << pdb_.chains() << "\n";
   }
 
   Model(const Model &rhs) {}
+
+  ~Model() {
+  }
 private:
+  gilgamesh::pdb_decoder pdb_;
 };
 
 class View {
@@ -1097,6 +1112,13 @@ public:
   View(Instance &instance, int width, int height) {
     printf("%dx%d\n", width, height);
   }
+
+  boost::python::object render(Instance &instance, Model &model) {
+    static char data[10] = {0};
+    int dataSize = 10;
+    return boost::python::object(boost::python::handle<>(PyMemoryView_FromMemory(data, dataSize, PyBUF_READ)));
+  }
+
 
   View(const View &rhs) {}
 private:
@@ -1107,12 +1129,11 @@ BOOST_PYTHON_MODULE(moovoo)
 {
   using namespace boost::python;
   class_<Instance>("Instance", init<>())
-    //.def("greet", &World::greet)
-    //.def("set", &World::set)
   ;
   class_<View>("View", init<Instance &, int, int>())
-    //.def("greet", &World::greet)
-    //.def("set", &World::set)
+    .def("render", &View::render)
+  ;
+  class_<Model>("Model", init<Instance &, boost::python::object &>())
   ;
 }
 

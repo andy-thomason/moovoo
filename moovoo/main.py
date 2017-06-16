@@ -6,7 +6,17 @@ import urllib
 
 import moovoo
 
-#inst = moovoo.Instance()
+inst = moovoo.Instance()
+
+modelBytes = open("../molecules/2tgt.cif", "rb").read()
+
+model = moovoo.Model(inst, modelBytes)
+
+view = moovoo.View(inst, 640, 480)
+
+img = view.render(inst, model)
+
+print(img)
 
 """
 with open("1.jpg", "rb") as f1:
