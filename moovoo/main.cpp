@@ -1,4 +1,4 @@
-////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 //
 // (C) Andy Thomason 2017
 //
@@ -729,6 +729,13 @@ private:
       mouseState_.prevYpos = ypos;
     }    
 
+    {
+      auto &mat = moleculeState_.modelToWorld;
+      glm::mat4 worldToModel = glm::inverse(moleculeState_.modelToWorld);
+      glm::vec3 xaxis = worldToModel[0];
+      mat = glm::rotate(mat, glm::radians(0.1f), xaxis);
+    }
+
     //moleculeState_.modelToWorld = glm::rotate(moleculeState_.modelToWorld, glm::radians(1.0f), glm::vec3(0, 1, 0));
 
     auto gfi = fw_.graphicsQueueFamilyIndex();
@@ -795,6 +802,7 @@ private:
         cu.worldToPerspective = cameraState_.cameraToPerspective * worldToCamera;
         cu.modelToWorld = modelToWorld;
         cu.cameraToWorld = cameraToWorld;
+        std::cout << glm::to_string(cu.modelToWorld) << "\n";
 
         using psflags = vk::PipelineStageFlagBits;
         using aflags = vk::AccessFlagBits;
@@ -1095,7 +1103,8 @@ public:
   const vk::CommandPool &commandPool() { return *commandPool_; }
   vk::Device device() { return fw_.device(); }
   uint32_t graphicsQueueFamilyIndex() { return fw_.graphicsQueueFamilyIndex(); }
-
+  vk::PipelineCache pipelineCache() { return fw_.pipelineCache(); }
+  vk::DescriptorPool descriptorPool() { return fw_.descriptorPool(); }
   void addCM(ChildMurderer *thiz) { cm_.push_back(thiz); }
 private:
   vku::Framework fw_;
@@ -1384,24 +1393,26 @@ private:
 class View : public ChildMurderer {
 public:
   View() {}
-  View(Context &instance, uint32_t width, uint32_t height) {
-    instance.addCM(this);
+
+  View(Context &ctxt, Model &model, uint32_t width, uint32_t height) {
+    ctxt.addCM(this);
     width_ = width;
     height_ = height;
 
-    auto device = instance.device();
-    auto memprops = instance.memprops();
+    auto device = ctxt.device();
+    auto memprops = ctxt.memprops();
+    auto graphicsQueueFamilyIndex = ctxt.graphicsQueueFamilyIndex();
+    auto queue = ctxt.queue();
 
     depthStencilImage_ = vku::DepthStencilImage(device, memprops, width, height);
     colorAttachmentImage_ = vku::ColorAttachmentImage(device, memprops, width, height);
-
 
     using buf = vk::BufferUsageFlagBits;
     transferBuffer_ = vku::GenericBuffer(device, memprops, buf::eTransferDst, width*height*4, vk::MemoryPropertyFlagBits::eHostVisible);
     mappedTransferBuffer_ = transferBuffer_.map(device);
 
     typedef vk::CommandPoolCreateFlagBits ccbits;
-    vk::CommandPoolCreateInfo cpci{ ccbits::eTransient|ccbits::eResetCommandBuffer, instance.graphicsQueueFamilyIndex() };
+    vk::CommandPoolCreateInfo cpci{ ccbits::eTransient|ccbits::eResetCommandBuffer, ctxt.graphicsQueueFamilyIndex() };
     commandPool_ = device.createCommandPoolUnique(cpci);
 
     // Build the renderpass using two attachments, colour and depth/stencil.
@@ -1435,18 +1446,252 @@ public:
     vk::ImageView attachments[2] = {colorAttachmentImage_.imageView(), depthStencilImage_.imageView()};
     vk::FramebufferCreateInfo fbci{{}, *renderPass_, 2, attachments, width, height, 1 };
     frameBuffer_ = device.createFramebufferUnique(fbci);
+
+    //modelToWorld = glm::rotate(modelToWorld, glm::radians(90.0f), glm::vec3(1, 0, 0));
+    // This matrix converts between OpenGL perspective and Vulkan perspective.
+    // It flips the Y axis and shrinks the Z value to [0,1]
+    glm::mat4 leftHandCorrection(
+      1.0f,  0.0f, 0.0f, 0.0f,
+      0.0f, -1.0f, 0.0f, 0.0f,
+      0.0f,  0.0f, 0.5f, 0.0f,
+      0.0f,  0.0f, 0.5f, 1.0f
+    );
+
+    float fieldOfView = glm::radians(45.0f);
+    cameraState_.cameraToPerspective = leftHandCorrection * glm::perspective(fieldOfView, (float)width_/height_, 0.1f, 10000.0f);
+
+    auto cubeBytes = vku::loadFile(SOURCE_DIR "textures/okretnica.ktx");
+    vku::KTXFileLayout ktx(cubeBytes.data(), cubeBytes.data()+cubeBytes.size());
+    if (!ktx.ok()) {
+      std::cout << "Could not load KTX file" << std::endl;
+      exit(1);
+    }
+
+    cubeMap_ = vku::TextureImageCube{device, memprops, ktx.width(0), ktx.height(0), ktx.mipLevels(), vk::Format::eR8G8B8A8Unorm};
+    ktx.upload(device, cubeMap_, cubeBytes, *commandPool_, memprops, queue);
+
+    vku::SamplerMaker sm{};
+    sm.magFilter(vk::Filter::eLinear);
+    sm.minFilter(vk::Filter::eLinear);
+    sm.mipmapMode(vk::SamplerMipmapMode::eNearest);
+    cubeSampler_ = sm.createUnique(device);
+
+
+    standardLayout_ = StandardLayout(device);
+
+    dynamicsPipeline_ = DynamicsPipeline(device, ctxt.pipelineCache(), *renderPass_, width_, height_, standardLayout_.pipelineLayout());
+
+    fountPipeline_ = FountPipeline(device, ctxt.pipelineCache(), *renderPass_, width_, height_, standardLayout_.pipelineLayout());
+
+    skyboxPipeline_ = GraphicsPipeline(
+      device, ctxt.pipelineCache(), *renderPass_, width_, height_, standardLayout_.pipelineLayout(),
+      BINARY_DIR "skybox.vert.spv",  BINARY_DIR "skybox.frag.spv"
+    );
+
+    atomPipeline_ = GraphicsPipeline(
+      device, ctxt.pipelineCache(), *renderPass_, width_, height_, standardLayout_.pipelineLayout(),
+      BINARY_DIR "atoms.vert.spv",  BINARY_DIR "atoms.frag.spv"
+    );
+
+    connPipeline_ = GraphicsPipeline(
+      device, ctxt.pipelineCache(), *renderPass_, width_, height_, standardLayout_.pipelineLayout(),
+      BINARY_DIR "conns.vert.spv",  BINARY_DIR "conns.frag.spv"
+    );
+
+    textModel_ = TextModel(FOUNT_NAME, device, memprops, *commandPool_, queue);
+    //textModel_.draw(vec3(0), vec2(0), vec3(0, 0, 1), vec2(0.1f), "hello world");
+
+
+    //moleculeModel_.updateDescriptorSet(device, standardLayout_.descriptorSetLayout(), ctxt.descriptorPool(), *cubeSampler_, cubeMap_.imageView(), textModel_.sampler(), textModel_.imageView(), textModel_.glyphs(), textModel_.maxGlyphs());
+
+    for (int i = 0; i != Pick::fifoSize; ++i) {
+      vk::EventCreateInfo eci{};
+      pickEvents_.push_back(ctxt.device().createEventUnique(eci));
+    }
+
+    model.updateDescriptorSet(device, standardLayout_.descriptorSetLayout(), ctxt.descriptorPool(), *cubeSampler_, cubeMap_.imageView(), textModel_.sampler(), textModel_.imageView(), textModel_.glyphs(), textModel_.maxGlyphs());
   }
 
-  boost::python::object render(Context &instance, Model &model) {
-    auto device = instance.device();
-    auto memprops = instance.memprops();
-    auto queue = instance.queue();
+  boost::python::object render(Context &ctxt, Model &model) {
+    auto device = ctxt.device();
+    auto memprops = ctxt.memprops();
+    auto queue = ctxt.queue();
+    auto graphicsQueueFamilyIndex = ctxt.graphicsQueueFamilyIndex();
+
+    float timeStep = 1.0f / 60;
+
+    double xpos = 0, ypos = 0;
+    //glfwGetCursorPos(glfwwindow_, &xpos, &ypos);
+
+    // Trackball rotation.
+    if (mouseState_.rotating) {
+      float dx = float(xpos - mouseState_.prevXpos);
+      float dy = float(ypos - mouseState_.prevYpos);
+      float dz = 0;
+      float xspeed = 0.1f;
+      float yspeed = 0.1f;
+      float zspeed = 0.2f;
+      float halfw = width_ * 0.5f;
+      float halfh = height_ * 0.5f;
+      float thresh = std::min(halfh, halfw) * 0.8f;
+      float rx = float(xpos) - halfw;
+      float ry = float(ypos) - halfh;
+      float r = std::sqrt(rx*rx + ry*ry);
+      float speed = std::sqrt(dx*dx + dy*dy);
+
+      // Z rotation when outside inner circle
+      if (r - thresh > 0 && speed > 0) {
+        float tail = std::min((r - thresh) * (2.0f / thresh), 1.0f);
+        dz = (dx * ry - dy * rx) * tail / std::sqrt(rx*rx + ry*ry);
+        dx *= (1.0f - tail);
+        dy *= (1.0f - tail);
+      }
+      glm::mat4 worldToModel = glm::inverse(moleculeState_.modelToWorld);
+      glm::vec3 xaxis = worldToModel[0];
+      glm::vec3 yaxis = worldToModel[1];
+      glm::vec3 zaxis = worldToModel[2];
+      auto &mat = moleculeState_.modelToWorld;
+      mat = glm::rotate(mat, glm::radians(dy * yspeed), xaxis);
+      mat = glm::rotate(mat, glm::radians(dx * xspeed), yaxis);
+      mat = glm::rotate(mat, glm::radians(dz * zspeed), zaxis);
+      mouseState_.prevXpos = xpos;
+      mouseState_.prevYpos = ypos;
+    }    
+
+    {
+      auto &mat = moleculeState_.modelToWorld;
+      glm::mat4 worldToModel = glm::inverse(moleculeState_.modelToWorld);
+      glm::vec3 xaxis = worldToModel[0];
+      glm::vec3 yaxis = worldToModel[1];
+      mat = glm::rotate(mat, glm::radians(3.0f), yaxis);
+    }
+
+    //moleculeState_.modelToWorld = glm::rotate(moleculeState_.modelToWorld, glm::radians(1.0f), glm::vec3(0, 1, 0));
+
+    auto gfi = graphicsQueueFamilyIndex;
+
+    vk::Event event = *pickEvents_[pickReadIndex_ & (Pick::fifoSize-1)];
+    while (device.getEventStatus(event) == vk::Result::eEventSet) {
+      Pick *pick = (Pick*)model.pick().map(device);
+      Pick &p = pick[pickReadIndex_ & (Pick::fifoSize-1)];
+      moleculeState_.mouseAtom = p.atom;
+      moleculeState_.mouseDistance = p.distance / 10000.0f;
+      //printf("pick %d %d\n", p.atom, p.distance);
+      model.pick().unmap(device);
+      p.distance = ~0;
+      p.atom = ~0;
+      device.resetEvent(event);
+      pickReadIndex_++;
+    }
+
+    glm::mat4 cameraToWorld = glm::translate(glm::mat4{}, glm::vec3(0, 0, cameraState_.cameraDistance));
+    glm::mat4 modelToWorld = moleculeState_.modelToWorld;
+
+    glm::mat4 worldToCamera = glm::inverse(cameraToWorld);
+    glm::mat4 worldToModel = glm::inverse(modelToWorld);
+
+    glm::vec3 worldCameraPos = cameraToWorld[3];
+    glm::vec3 modelCameraPos = worldToModel * glm::vec4(worldCameraPos, 1);
+    float xscreen = (float)xpos * 2.0f / width_ - 1.0f;
+    float yscreen = (float)ypos * 2.0f / height_ - 1.0f;
+    float tanfovX = 1.0f / cameraState_.cameraToPerspective[0][0];
+    float tanfovY = 1.0f / cameraState_.cameraToPerspective[1][1];
+    glm::vec4 cameraMouseDir = glm::vec4(xscreen * tanfovX, yscreen * tanfovY, -1, 0);
+    glm::vec3 modelMouseDir = worldToModel * (cameraToWorld * cameraMouseDir);
+
+    {
+      Atom *atoms = model.pAtoms();
+
+      /*if (moleculeState_.dragging) {
+        if (moleculeState_.selectedAtom < moleculeModel_.numAtoms()) {
+          vec3 mousePos = modelCameraPos + modelMouseDir * moleculeState_.selectedDistance;
+          vec3 atomPos = atoms[moleculeState_.selectedAtom].pos;
+          //printf("%s %s\n", to_string(mousePos).c_str(), to_string(atomPos).c_str());
+          vec3 axis = mousePos - atomPos;
+          float f = length(axis) * 10.0f;
+          atoms[moleculeState_.selectedAtom].acc += normalize(axis) * (f * timeStep);
+        }
+      }*/
+    }
+
+    static int z = 0;
+    float c = std::cos(z++ * 0.1f);
     vku::executeImmediately(device, *commandPool_, queue, [&](vk::CommandBuffer cb) {
-      colorAttachmentImage_.setLayout(cb, vk::ImageLayout::eGeneral);
-      std::array<float, 4> cval{1, 0, 0, 1};
-      vk::ClearColorValue color{cval};
-      vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-      cb.clearColorImage( colorAttachmentImage_.image(), vk::ImageLayout::eGeneral, color, range);
+      PushConstants cu;
+      //cu.timeStep = timeStep;
+      cu.numAtoms = model.numAtoms();
+      cu.numConnections = model.numConnections();
+      cu.pickIndex = (pickWriteIndex_++) & (Pick::fifoSize-1);
+      //cu.forceAtom = moleculeState_.selectedAtom;
+
+      cu.rayStart = modelCameraPos;
+      cu.rayDir = glm::normalize(modelMouseDir);
+
+      cu.worldToPerspective = cameraState_.cameraToPerspective * worldToCamera;
+      cu.modelToWorld = modelToWorld;
+      cu.cameraToWorld = cameraToWorld;
+
+      using psflags = vk::PipelineStageFlagBits;
+      using aflags = vk::AccessFlagBits;
+
+      uint32_t ninst = 1; //moleculeState_.showInstances ? model.numInstances() : 1;
+
+      // Do the physics velocity update on the GPU and the first pick pass
+      cu.pass = 0;
+      cb.pushConstants(standardLayout_.pipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, sizeof(PushConstants), &cu);
+      cb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, standardLayout_.pipelineLayout(), 0, model.descriptorSet(), nullptr);
+      cb.bindPipeline(vk::PipelineBindPoint::eCompute, dynamicsPipeline_.pipeline());
+      cb.dispatch(cu.numAtoms, ninst, 1);
+
+      // Do the physics position update on the GPU and the second pick pass
+      cu.pass = 1;
+      cb.pushConstants(standardLayout_.pipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, sizeof(PushConstants), &cu);
+      cb.dispatch(cu.numAtoms, ninst, 1);
+
+      /*
+      moleculeModel_.atoms().barrier(
+        cb, psflags::eComputeShader, psflags::eTopOfPipe, {},
+        aflags::eShaderRead|aflags::eShaderWrite, aflags::eShaderRead, gfi, gfi
+      );
+      */
+
+      // Signal the CPU that a pick event has occurred
+      cb.setEvent(*pickEvents_[cu.pickIndex], vk::PipelineStageFlagBits::eComputeShader);
+
+      std::array<float, 4> clearColorValue{0.75f, 0.75f, 0.75f, 1};
+      vk::ClearDepthStencilValue clearDepthValue{ 1.0f, 0 };
+      std::array<vk::ClearValue, 2> clearColours{vk::ClearValue{clearColorValue}, clearDepthValue};
+      vk::RenderPassBeginInfo rpbi;
+      rpbi.renderPass = *renderPass_;
+      rpbi.framebuffer = *frameBuffer_;
+      rpbi.renderArea = vk::Rect2D{{0, 0}, {width_, height_}};
+      rpbi.clearValueCount = (uint32_t)clearColours.size();
+      rpbi.pClearValues = clearColours.data();
+      cb.beginRenderPass(rpbi, vk::SubpassContents::eInline);
+
+      cb.pushConstants(standardLayout_.pipelineLayout(), vk::ShaderStageFlagBits::eAll, 0, sizeof(PushConstants), &cu);
+      cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, standardLayout_.pipelineLayout(), 0, model.descriptorSet(), nullptr);
+
+      cb.bindPipeline(vk::PipelineBindPoint::eGraphics, skyboxPipeline_.pipeline());
+      cb.draw(6 * 6, 1, 0, 0);
+
+      cb.bindPipeline(vk::PipelineBindPoint::eGraphics, atomPipeline_.pipeline());
+      if (model.numAtoms()) cb.draw(model.numAtoms() * 6, ninst, 0, 0);
+
+      cb.bindPipeline(vk::PipelineBindPoint::eGraphics, connPipeline_.pipeline());
+      if (model.numConnections()) cb.draw(model.numConnections() * 6, ninst, 0, 0);
+
+      cb.bindPipeline(vk::PipelineBindPoint::eGraphics, fountPipeline_.pipeline());
+      if (textModel_.numGlyphs()) cb.draw(textModel_.numGlyphs() * 6, ninst, 0, 0);
+
+      cb.endRenderPass();
+
+      //colorAttachmentImage_.setLayout(cb, vk::ImageLayout::eGeneral);
+      //std::array<float, 4> cval{c, 0, 0, 1};
+      //vk::ClearColorValue color{cval};
+      //vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+      //cb.clearColorImage( colorAttachmentImage_.image(), vk::ImageLayout::eGeneral, color, range);
+
       vk::BufferImageCopy region{
         0, 0, 0,
         {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
@@ -1483,6 +1728,54 @@ private:
   uint32_t width_;
   uint32_t height_;
   void *mappedTransferBuffer_;
+
+  StandardLayout standardLayout_;
+  FountPipeline fountPipeline_;
+
+  DynamicsPipeline dynamicsPipeline_;
+
+  GraphicsPipeline atomPipeline_;
+  GraphicsPipeline connPipeline_;
+  GraphicsPipeline skyboxPipeline_;
+
+  TextModel textModel_;
+
+  vku::TextureImageCube cubeMap_;
+  vk::UniqueSampler cubeSampler_;
+
+  struct MouseState {
+    double prevXpos = 0;
+    double prevYpos = 0;
+    bool rotating = false;
+  };
+  MouseState mouseState_;
+
+  //GLFWwindow *glfwwindow_;
+  vk::Device device_;
+
+  struct MoleculeState {
+    glm::mat4 modelToWorld;
+    int startAtom = -1;
+    int endAtom = -1;
+    int mouseAtom;
+    float selectedDistance;
+    float mouseDistance;
+    bool dragging = false;
+    bool showInstances = false;
+  };
+  MoleculeState moleculeState_;
+
+  struct CameraState {
+    glm::mat4 cameraRotation;
+    glm::mat4 cameraToPerspective;
+    float cameraDistance = 50.0f;
+  };
+  CameraState cameraState_;
+
+  uint32_t pickWriteIndex_ = 0;
+  uint32_t pickReadIndex_ = 0;
+
+  std::vector<vk::UniqueEvent> pickEvents_;
 };
 
 
@@ -1491,7 +1784,7 @@ BOOST_PYTHON_MODULE(moovoo)
   using namespace boost::python;
   class_<Context>("Context", init<>())
   ;
-  class_<View>("View", init<Context &, int, int>())
+  class_<View>("View", init<Context &, Model &, int, int>())
     .def("render", &View::render)
   ;
   class_<Model>("Model", init<Context &, boost::python::object &>())

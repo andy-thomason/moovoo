@@ -1,44 +1,22 @@
 import os
+import io
 import sys
 import ssl
 import urllib
 from PIL import Image
-#import http.server
+import http.server
 
 import moovoo
 
-inst = moovoo.Context()
 
-modelBytes = open("../molecules/2tgt.cif", "rb").read()
-
-model = moovoo.Model(inst, modelBytes)
-
-view = moovoo.View(inst, 640, 480)
-
-data = view.render(inst, model)
-
-print(data[0], data[1], data[2], data[3])
-
-pilimg = Image.frombuffer("RGBA", (640, 480), data, "raw", "RGBA", 0, 1)
-
-pilimg.save("res.jpg")
-
-
-del view
-del model
-del inst
-
-
-"""
-with open("1.jpg", "rb") as f1:
-  j1 = f1.read()
-
-with open("2.jpg", "rb") as f1:
-  j2 = f1.read()
 
 class moovoo_server(http.server.HTTPServer):
-  def __init__(self, addr):
-    http.server.HTTPServer.__init__(self, addr, handler)
+  def __init__(s, addr, handler):
+    http.server.HTTPServer.__init__(s, addr, handler)
+    s.ctxt = moovoo.Context()
+    s.modelBytes = open("../molecules/2tgt.cif", "rb").read()
+    s.model = moovoo.Model(s.ctxt, s.modelBytes)
+    s.view = moovoo.View(s.ctxt, s.model, 640, 480)
 
 class moovoo_handler(http.server.BaseHTTPRequestHandler):
   def do_GET(s):
@@ -60,16 +38,19 @@ class moovoo_handler(http.server.BaseHTTPRequestHandler):
       s.send_header("Content-Type", "multipart/x-mixed-replace; boundary=--BoundaryString");
       s.end_headers()
       while True:
-        s.wfile.write(b"--BoundaryString\r\nContent-type: image/jpg\r\nContent-Length: %d\r\n\r\n" % len(j1))
-        s.wfile.write(j1)
-        s.wfile.write(b"--BoundaryString\r\nContent-type: image/jpg\r\nContent-Length: %d\r\n\r\n" % len(j2))
-        s.wfile.write(j2)
+        data = s.server.view.render(s.server.ctxt, s.server.model)
+        pilimg = Image.frombuffer("RGBA", (640, 480), data, "raw", "RGBA", 0, 1)
+        stream = io.BytesIO()
+        pilimg.save(stream, "JPEG")
+        b = stream.getbuffer()
+        s.wfile.write(b"--BoundaryString\r\nContent-type: image/jpg\r\nContent-Length: %d\r\n\r\n" % len(b))
+        s.wfile.write(b)
 
 def main(argv):
   ip = "0.0.0.0"
-  port = 443
-  httpd = http.server.HTTPServer((ip, port), moovoo_handler)
-  httpd.socket = ssl.wrap_socket (httpd.socket, certfile='cert.pem', server_side=True)
+  port = 8000
+  httpd = moovoo_server((ip, port), moovoo_handler)
+  #httpd.socket = ssl.wrap_socket (httpd.socket, certfile='cert.pem', server_side=True)
   while True:
     httpd.handle_request()
 
@@ -81,5 +62,4 @@ if __name__ == "__main__":
 
 
 
-"""
 
