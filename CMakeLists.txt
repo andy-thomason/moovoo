@@ -51,4 +51,4 @@ if (UNIX)
 	target_link_libraries(moovoo vulkan dl pthread)
 endif()
 
-
+file(COPY moovoo/main.py DESTINATION ${PROJECT_BINARY_DIR})

@@ -2,11 +2,12 @@ import os
 import sys
 import ssl
 import urllib
+from PIL import Image
 #import http.server
 
 import moovoo
 
-inst = moovoo.Instance()
+inst = moovoo.Context()
 
 modelBytes = open("../molecules/2tgt.cif", "rb").read()
 
@@ -14,9 +15,19 @@ model = moovoo.Model(inst, modelBytes)
 
 view = moovoo.View(inst, 640, 480)
 
-img = view.render(inst, model)
+data = view.render(inst, model)
 
-print(img)
+print(data[0], data[1], data[2], data[3])
+
+pilimg = Image.frombuffer("RGBA", (640, 480), data, "raw", "RGBA", 0, 1)
+
+pilimg.save("res.jpg")
+
+
+del view
+del model
+del inst
+
 
 """
 with open("1.jpg", "rb") as f1:

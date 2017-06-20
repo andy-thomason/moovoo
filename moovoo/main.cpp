@@ -32,8 +32,6 @@
 #define FOUNT_NAME "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 #endif
 
-#if 0
-namespace molvoo {
 
 using mat4 = glm::mat4;
 using vec2 = glm::vec2;
@@ -291,6 +289,8 @@ private:
   int numGlyphs_;
   std::vector<stbtt_packedchar> charInfo_;
 };
+
+#if 0
 
 class MoleculeModel {
 public:
@@ -1064,27 +1064,52 @@ private:
 
 #endif
 
-class Instance {
+class ChildMurderer {
 public:
-  Instance() {
+  virtual void kill() = 0;
+};
+
+class Context {
+public:
+  Context() {
     fw_ = vku::Framework{"moovoo"};
     if (!fw_.ok()) {
       throw std::runtime_error("Vulkan framework creation failed");
     }
 
-    device_ = fw_.device();
+    typedef vk::CommandPoolCreateFlagBits ccbits;
+
+    vk::CommandPoolCreateInfo cpci{ ccbits::eTransient|ccbits::eResetCommandBuffer, fw_.graphicsQueueFamilyIndex() };
+    commandPool_ = fw_.device().createCommandPoolUnique(cpci);
   }
 
-  Instance(const Instance &rhs) {}
+  Context(const Context &rhs) {}
+
+  ~Context() {
+    //for (auto cm : cm_) cm->kill();
+    printf("~Context\n");
+  }
+
+  const vk::PhysicalDeviceMemoryProperties &memprops() { return fw_.memprops(); }
+  vk::Queue queue() const { return fw_.graphicsQueue(); }
+  const vk::CommandPool &commandPool() { return *commandPool_; }
+  vk::Device device() { return fw_.device(); }
+  uint32_t graphicsQueueFamilyIndex() { return fw_.graphicsQueueFamilyIndex(); }
+
+  void addCM(ChildMurderer *thiz) { cm_.push_back(thiz); }
 private:
   vku::Framework fw_;
   vk::Device device_;
+  vk::UniqueCommandPool commandPool_;
+  std::vector<ChildMurderer*> cm_;
 };
 
-class Model {
+class Model : public ChildMurderer {
 public:
   Model() {}
-  Model(Instance &, boost::python::object bytes) {
+
+  Model(Context &inst, boost::python::object bytes) {
+    inst.addCM(this);
     Py_buffer pybuf;
     if (PyObject_GetBuffer(bytes.ptr(), &pybuf, PyBUF_SIMPLE) < 0) {
       throw std::runtime_error("Model expects buffer object");
@@ -1095,45 +1120,381 @@ public:
     pdb_ = gilgamesh::pdb_decoder(b, e);
     PyBuffer_Release(&pybuf);
 
-    std::cout << pdb_.chains() << "\n";
+    std::string chains = pdb_.chains();
+    pdbAtoms_ = pdb_.atoms(chains);
+
+    glm::vec3 mean(0);
+    glm::vec3 min(1e38f);
+    glm::vec3 max(-1e38f);
+    for (auto &atom : pdbAtoms_) {
+      glm::vec3 pos = atom.pos();
+      min = glm::min(min, pos);
+      max = glm::max(max, pos);
+      mean += pos;
+    }
+    mean /= (float)pdbAtoms_.size();
+
+    std::vector<Atom> atoms;
+    std::vector<glm::vec3> pos;
+    std::vector<float> radii;
+    for (auto &atom : pdbAtoms_) {
+      glm::vec3 colour = atom.colorByElement();
+      colour.r = colour.r * 0.75f + 0.25f;
+      colour.g = colour.g * 0.75f + 0.25f;
+      colour.b = colour.b * 0.75f + 0.25f;
+      Atom a{};
+      a.pos = a.prevPos = atom.pos() - mean;
+      pos.push_back(a.pos);
+      float scale = 0.1f;
+      if (atom.atomNameIs("N") || atom.atomNameIs("CA") || atom.atomNameIs("C") || atom.atomNameIs("P")) scale = 0.4f;
+      float radius = atom.vanDerVaalsRadius();
+      radii.push_back(radius);
+      a.radius = radius * scale;
+      a.colour = colour;
+      a.acc = glm::vec3(0, 0, 0);
+      a.mass = 1.0f;
+      std::fill(std::begin(a.connections), std::end(a.connections), -1);
+      atoms.push_back(a);
+    }
+
+    min -= mean;
+    max -= mean;
+    glm::vec3 extent = max - min;
+    float grid_spacing = 1.0f;
+    int xdim = int(extent.x / grid_spacing) + 1;
+    int ydim = int(extent.y / grid_spacing) + 1;
+    int zdim = int(extent.z / grid_spacing) + 1;
+    gilgamesh::distance_field df(xdim, ydim, zdim, grid_spacing, min, pos, radii);
+
+    auto &distance = df.distances();
+
+    auto idx = [xdim, ydim, zdim](int x, int y, int z) { return (z * ydim + y) + xdim + x; };
+
+    /*std::vector<glm::vec3> solventAcessible;
+    for (int z = 0; z != zdim; ++z) {
+      for (int y = 0; y != ydim; ++y) {
+        for (int x = 0; x != xdim; ++x) {
+          int i = idx(x, y, z);
+          float d000 = distance[i];
+          float d100 = distance[i + idx(1, 0, 0)];
+          float d010 = distance[i + idx(0, 1, 0)];
+          float d001 = distance[i + idx(0, 0, 1)];
+          glm::vec3 pos = min + glm::vec3(x, y, z) * grid_spacing;
+          if (d000 * d100 < 0) {
+            float d = grid_spacing + d000 / (d000 - d100);
+            solventAcessible.push_back(glm::vec3(pos.x + d, pos.y, pos.z));
+          }
+          if (d000 * d010 < 0) {
+            float d = grid_spacing + d000 / (d000 - d010);
+            solventAcessible.push_back(glm::vec3(pos.x, pos.y + d, pos.z));
+          }
+          if (d000 * d001 < 0) {
+            float d = grid_spacing + d000 / (d000 - d001);
+            solventAcessible.push_back(glm::vec3(pos.x, pos.y, pos.z + d));
+          }
+        }
+      }
+    }*/
+
+    std::vector<std::pair<int, int>> pairs;
+    int prevC = -1;
+    char prevChainID = '?';
+    for (size_t bidx = 0; bidx != pdbAtoms_.size(); ) {
+      // At the start of every Amino Acid, connect the atoms.
+      char chainID = pdbAtoms_[bidx].chainID();
+      char iCode = pdbAtoms_[bidx].iCode();
+      size_t eidx = pdb_.nextResidue(pdbAtoms_, bidx);
+      if (prevChainID != chainID) prevC = -1;
+
+      // iCode is 'A' etc. for alternates.
+      if (iCode == ' ' || iCode == '?') {
+        /*for (size_t i = bidx; i != eidx; ++i) {
+          for (size_t j = i+1; j <= eidx; ++j) {
+            if (length(atoms[i].pos - atoms[j].pos) < vdv[i] + vdv[j]) {
+              pairs.emplace_back((int)i, (int)j);
+            }
+          }
+        }*/
+        prevC = pdb_.addImplicitConnections(pdbAtoms_, pairs, bidx, eidx, prevC, false);
+        prevChainID = chainID;
+      }
+      bidx = eidx;
+    }
+
+    for (auto &p : pairs) {
+      Atom &from = atoms[p.first];
+      Atom &to = atoms[p.second];
+      for (auto &i : from.connections) {
+        if (i == -1) {
+          i = p.second;
+          break;
+        }
+      }
+      for (auto &i : to.connections) {
+        if (i == -1) {
+          i = p.first;
+          break;
+        }
+      }
+    }
+
+    std::vector<Connection> conns;
+    for (auto &p : pairs) {
+      Connection c;
+      c.from = p.first;
+      c.to = p.second;
+      glm::vec3 p1 = atoms[c.from].pos;
+      glm::vec3 p2 = atoms[c.to].pos;
+      c.naturalLength = glm::length(p2 - p1);
+      c.springConstant = 100;
+      conns.push_back(c);
+    }
+
+    if (0) {
+      atoms.resize(0);
+      conns.resize(0);
+
+      Atom a{};
+      a.colour = glm::vec3(1);
+      a.mass = 1;
+      a.pos = glm::vec3(-2, 0, 0);
+      a.radius = 1;
+      atoms.push_back(a);
+      a.pos = glm::vec3( 0, 0, 0);
+      atoms.push_back(a);
+      a.pos = glm::vec3( 2, 0, 0);
+      atoms.push_back(a);
+
+      Connection c{};
+      c.from = 0;
+      c.to = 1;
+      c.naturalLength = 2;
+      c.springConstant = 10;
+      conns.push_back(c);
+      c.from = 1;
+      c.to = 2;
+      conns.push_back(c);
+    }
+
+    std::vector<Instance> instances;
+    for (auto &mat : pdb_.instanceMatrices()) {
+      Instance ins{};
+      ins.modelToWorld = mat;
+      instances.push_back(ins);
+    }
+
+    if (instances.empty()) {
+      Instance ins{};
+      instances.push_back(ins);
+    }
+
+    numAtoms_ = (uint32_t)atoms.size();
+    numConnections_ = (uint32_t)conns.size();
+    numContexts_ = (uint32_t)instances.size();
+
+    auto memprops = inst.memprops();
+    auto device = inst.device();
+    auto commandPool = inst.commandPool();
+    auto queue = inst.queue();
+
+    using buf = vk::BufferUsageFlagBits;
+    atoms_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, (numAtoms_+1) * sizeof(Atom), vk::MemoryPropertyFlagBits::eHostVisible);
+    pick_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer, sizeof(Pick) * Pick::fifoSize, vk::MemoryPropertyFlagBits::eHostVisible);
+    conns_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(Connection) * (numConnections_+1), vk::MemoryPropertyFlagBits::eHostVisible);
+    instances_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(Context) * numContexts_, vk::MemoryPropertyFlagBits::eHostVisible);
+    //solventAcessible_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(glm::vec3) * solventAcessible.size(), vk::MemoryPropertyFlagBits::eHostVisible);
+
+    atoms_.upload(device, memprops, commandPool, queue, atoms);
+    conns_.upload(device, memprops, commandPool, queue, conns);
+    instances_.upload(device, memprops, commandPool, queue, instances);
+    //solventAcessible_.upload(device, memprops, commandPool, queue, solventAcessible);
+    pAtoms_ = (Atom*)atoms_.map(device);
+
+    printf("done\n");
   }
+
+  void updateDescriptorSet(vk::Device device, vk::DescriptorSetLayout layout, vk::DescriptorPool descriptorPool, vk::Sampler cubeSampler, vk::ImageView cubeImageView, vk::Sampler fountSampler, vk::ImageView fountImageView, vk::Buffer glyphs, int maxGlyphs) {
+    vku::DescriptorSetMaker dsm{};
+    dsm.layout(layout);
+    auto StandardLayout = dsm.create(device, descriptorPool);
+    descriptorSet_ = StandardLayout[0];
+
+    vku::DescriptorSetUpdater update;
+    update.beginDescriptorSet(descriptorSet_);
+
+    // Point the descriptor set at the storage buffer.
+    update.beginBuffers(0, 0, vk::DescriptorType::eStorageBuffer);
+    update.buffer(atoms_.buffer(), 0, numAtoms_ * sizeof(Atom));
+    update.beginBuffers(1, 0, vk::DescriptorType::eStorageBuffer);
+    update.buffer(glyphs, 0, maxGlyphs * sizeof(Glyph));
+    update.beginBuffers(2, 0, vk::DescriptorType::eStorageBuffer);
+    update.buffer(pick_.buffer(), 0, sizeof(Pick) * Pick::fifoSize);
+    update.beginBuffers(3, 0, vk::DescriptorType::eStorageBuffer);
+    update.buffer(conns_.buffer(), 0, sizeof(Connection) * numConnections_);
+    update.beginImages(4, 0, vk::DescriptorType::eCombinedImageSampler);
+    update.image(cubeSampler, cubeImageView, vk::ImageLayout::eShaderReadOnlyOptimal);
+    update.beginImages(5, 0, vk::DescriptorType::eCombinedImageSampler);
+    update.image(fountSampler, fountImageView, vk::ImageLayout::eShaderReadOnlyOptimal);
+    update.beginBuffers(6, 0, vk::DescriptorType::eStorageBuffer);
+    update.buffer(instances_.buffer(), 0, numContexts_ * sizeof(Context));
+    //update.beginBuffers(7, 0, vk::DescriptorType::eStorageBuffer);
+    //update.buffer(solventAcessible_.buffer(), 0, solventAcessible_.size());
+
+    update.update(device);
+  }
+
+  vk::DescriptorSet descriptorSet() const { return descriptorSet_; }
+  uint32_t numAtoms() const { return numAtoms_; }
+  uint32_t numConnections() const { return numConnections_; }
+  uint32_t numContexts() const { return numContexts_; }
+  const vku::GenericBuffer &atoms() const { return atoms_; }
+  Atom *pAtoms() const { return pAtoms_; }
+  const vku::GenericBuffer &pick() const { return pick_; }
+  const vku::GenericBuffer &conns() const { return conns_; }
+  const std::vector<gilgamesh::pdb_decoder::atom> &pdbAtoms() { return pdbAtoms_; }
 
   Model(const Model &rhs) {}
+  void operator=(const Model &rhs) {}
 
-  ~Model() {
+  Model(Model &&rhs) = default;
+  Model &operator=(Model &&rhs) = default;
+
+  void kill() override {
+    printf("kill Model\n");
+    //*this = Model();
   }
+
 private:
+  uint32_t numAtoms_;
+  uint32_t numConnections_;
+  uint32_t numContexts_;
+  vku::GenericBuffer atoms_;
+  vku::GenericBuffer pick_;
+  vku::GenericBuffer conns_;
+  vku::GenericBuffer instances_;
+  vku::GenericBuffer solventAcessible_;
+  vk::DescriptorSet descriptorSet_;
   gilgamesh::pdb_decoder pdb_;
+  std::vector<uint8_t> pdb_text_;
+  std::vector<gilgamesh::pdb_decoder::atom> pdbAtoms_;
+  Atom *pAtoms_;
 };
 
-class View {
+/// One person's view of the world.
+class View : public ChildMurderer {
 public:
   View() {}
-  View(Instance &instance, int width, int height) {
-    printf("%dx%d\n", width, height);
+  View(Context &instance, uint32_t width, uint32_t height) {
+    instance.addCM(this);
+    width_ = width;
+    height_ = height;
+
+    auto device = instance.device();
+    auto memprops = instance.memprops();
+
+    depthStencilImage_ = vku::DepthStencilImage(device, memprops, width, height);
+    colorAttachmentImage_ = vku::ColorAttachmentImage(device, memprops, width, height);
+
+
+    using buf = vk::BufferUsageFlagBits;
+    transferBuffer_ = vku::GenericBuffer(device, memprops, buf::eTransferDst, width*height*4, vk::MemoryPropertyFlagBits::eHostVisible);
+    mappedTransferBuffer_ = transferBuffer_.map(device);
+
+    typedef vk::CommandPoolCreateFlagBits ccbits;
+    vk::CommandPoolCreateInfo cpci{ ccbits::eTransient|ccbits::eResetCommandBuffer, instance.graphicsQueueFamilyIndex() };
+    commandPool_ = device.createCommandPoolUnique(cpci);
+
+    // Build the renderpass using two attachments, colour and depth/stencil.
+    vku::RenderpassMaker rpm;
+
+    // The only colour attachment.
+    rpm.attachmentBegin(vk::Format::eB8G8R8A8Unorm);
+    rpm.attachmentLoadOp(vk::AttachmentLoadOp::eClear);
+    rpm.attachmentStoreOp(vk::AttachmentStoreOp::eStore);
+    rpm.attachmentFinalLayout(vk::ImageLayout::eTransferSrcOptimal);
+
+    // The depth/stencil attachment.
+    rpm.attachmentBegin(depthStencilImage_.format());
+    rpm.attachmentLoadOp(vk::AttachmentLoadOp::eClear);
+    rpm.attachmentFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+    // A subpass to render using the above two attachments.
+    rpm.subpassBegin(vk::PipelineBindPoint::eGraphics);
+    rpm.subpassColorAttachment(vk::ImageLayout::eColorAttachmentOptimal, 0);
+    rpm.subpassDepthStencilAttachment(vk::ImageLayout::eDepthStencilAttachmentOptimal, 1);
+
+    // A dependency to reset the layout of both attachments.
+    rpm.dependencyBegin(VK_SUBPASS_EXTERNAL, 0);
+    rpm.dependencySrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+    rpm.dependencyDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+    rpm.dependencyDstAccessMask(vk::AccessFlagBits::eColorAttachmentRead|vk::AccessFlagBits::eColorAttachmentWrite);
+
+    // Use the maker object to construct the vulkan object
+    renderPass_ = rpm.createUnique(device);
+
+    vk::ImageView attachments[2] = {colorAttachmentImage_.imageView(), depthStencilImage_.imageView()};
+    vk::FramebufferCreateInfo fbci{{}, *renderPass_, 2, attachments, width, height, 1 };
+    frameBuffer_ = device.createFramebufferUnique(fbci);
   }
 
-  boost::python::object render(Instance &instance, Model &model) {
-    static char data[10] = {0};
-    int dataSize = 10;
-    return boost::python::object(boost::python::handle<>(PyMemoryView_FromMemory(data, dataSize, PyBUF_READ)));
+  boost::python::object render(Context &instance, Model &model) {
+    auto device = instance.device();
+    auto memprops = instance.memprops();
+    auto queue = instance.queue();
+    vku::executeImmediately(device, *commandPool_, queue, [&](vk::CommandBuffer cb) {
+      colorAttachmentImage_.setLayout(cb, vk::ImageLayout::eGeneral);
+      std::array<float, 4> cval{1, 0, 0, 1};
+      vk::ClearColorValue color{cval};
+      vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+      cb.clearColorImage( colorAttachmentImage_.image(), vk::ImageLayout::eGeneral, color, range);
+      vk::BufferImageCopy region{
+        0, 0, 0,
+        {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        {0, 0, 0},
+        {width_, height_, 1}
+      };
+      colorAttachmentImage_.setLayout(cb, vk::ImageLayout::eTransferSrcOptimal);
+      cb.copyImageToBuffer( colorAttachmentImage_.image(), vk::ImageLayout::eTransferSrcOptimal, transferBuffer_.buffer(), region );
+    });
+
+    return boost::python::object(boost::python::handle<>(PyMemoryView_FromMemory(
+      (char*)mappedTransferBuffer_, transferBuffer_.size(), PyBUF_READ))
+    );
   }
 
 
   View(const View &rhs) {}
+  void operator=(const View &rhs) {}
+
+  View(View &&rhs) = default;
+  View &operator=(View &&rhs) = default;
+
+  void kill() override {
+    printf("kill View\n");
+    //*this = View();
+  }
 private:
+  vk::UniqueRenderPass renderPass_;
+  vku::DepthStencilImage depthStencilImage_;
+  vku::ColorAttachmentImage colorAttachmentImage_;
+  vk::UniqueFramebuffer frameBuffer_;
+  vku::GenericBuffer transferBuffer_;
+  vk::UniqueCommandPool commandPool_;
+  uint32_t width_;
+  uint32_t height_;
+  void *mappedTransferBuffer_;
 };
 
 
 BOOST_PYTHON_MODULE(moovoo)
 {
   using namespace boost::python;
-  class_<Instance>("Instance", init<>())
+  class_<Context>("Context", init<>())
   ;
-  class_<View>("View", init<Instance &, int, int>())
+  class_<View>("View", init<Context &, int, int>())
     .def("render", &View::render)
   ;
-  class_<Model>("Model", init<Instance &, boost::python::object &>())
+  class_<Model>("Model", init<Context &, boost::python::object &>())
   ;
 }
 
