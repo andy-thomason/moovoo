@@ -8,6 +8,8 @@ import http.server
 
 import moovoo
 
+SIZE=(1200, 800)
+
 
 
 class moovoo_server(http.server.HTTPServer):
@@ -16,7 +18,7 @@ class moovoo_server(http.server.HTTPServer):
     s.ctxt = moovoo.Context()
     s.modelBytes = open("../molecules/2tgt.cif", "rb").read()
     s.model = moovoo.Model(s.ctxt, s.modelBytes)
-    s.view = moovoo.View(s.ctxt, s.model, 640, 480)
+    s.view = moovoo.View(s.ctxt, s.model, SIZE[0], SIZE[1])
 
 class moovoo_handler(http.server.BaseHTTPRequestHandler):
   def do_GET(s):
@@ -39,11 +41,11 @@ class moovoo_handler(http.server.BaseHTTPRequestHandler):
       s.end_headers()
       while True:
         data = s.server.view.render(s.server.ctxt, s.server.model)
-        pilimg = Image.frombuffer("RGBA", (640, 480), data, "raw", "RGBA", 0, 1)
+        pilimg = Image.frombuffer("RGBA", SIZE, data, "raw", "RGBA", 0, 1)
         stream = io.BytesIO()
-        pilimg.save(stream, "JPEG")
+        pilimg.save(stream, "PNG")
         b = stream.getbuffer()
-        s.wfile.write(b"--BoundaryString\r\nContent-type: image/jpg\r\nContent-Length: %d\r\n\r\n" % len(b))
+        s.wfile.write(b"--BoundaryString\r\nContent-type: image/png\r\nContent-Length: %d\r\n\r\n" % len(b))
         s.wfile.write(b)
 
 def main(argv):
