@@ -11,7 +11,6 @@
 #ifndef VKU_FRAMEWORK_HPP
 #define VKU_FRAMEWORK_HPP
 
-#ifndef VKU_NO_WINDOW
 #ifdef WIN32
 #define VK_USE_PLATFORM_WIN32_KHR
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -22,11 +21,12 @@
 #define GLFW_EXPOSE_NATIVE_X11
 #define VKU_SURFACE "VK_KHR_xlib_surface"
 #endif
-#endif
 
+#ifndef VKU_NO_GLFW
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
+#endif
 
 // Undo damage done by windows.h
 #undef APIENTRY
@@ -61,14 +61,12 @@ public:
   // Construct a framework containing the instance, a device and one or more queues.
   Framework(const std::string &name) {
     std::vector<const char *> layers;
-    layers.push_back("VK_LAYER_LUNARG_standard_validation");
+    //layers.push_back("VK_LAYER_LUNARG_standard_validation");
 
     std::vector<const char *> instance_extensions;
     instance_extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-    #ifndef VKU_NO_WINDOW
-      instance_extensions.push_back(VKU_SURFACE);
-      instance_extensions.push_back("VK_KHR_surface");
-    #endif
+    instance_extensions.push_back(VKU_SURFACE);
+    instance_extensions.push_back("VK_KHR_surface");
 
     auto appinfo = vk::ApplicationInfo{};
     instance_ = vk::createInstanceUnique(vk::InstanceCreateInfo{
@@ -263,30 +261,38 @@ private:
   bool ok_ = false;
 };
 
-#ifndef VK_NO_WINDOW
 /// This class wraps a window, a surface and a swap chain for that surface.
 class Window {
 public:
   Window() {
   }
 
+#ifndef VKU_NO_GLFW
   /// Construct a window, surface and swapchain using a GLFW window.
   Window(const vk::Instance &instance, const vk::Device &device, const vk::PhysicalDevice &physicalDevice, uint32_t graphicsQueueFamilyIndex, GLFWwindow *window) {
-    device_ = device;
-
 #ifdef VK_USE_PLATFORM_WIN32_KHR
     auto module = GetModuleHandle(nullptr);
     auto handle = glfwGetWin32Window(window);
     auto ci = vk::Win32SurfaceCreateInfoKHR{{}, module, handle};
-    surface_ = instance.createWin32SurfaceKHRUnique(ci);
+    auto surface = instance.createWin32SurfaceKHR(ci);
 #endif
 #ifdef VK_USE_PLATFORM_XLIB_KHR
     auto display = glfwGetX11Display();
     auto x11window = glfwGetX11Window(window);
     auto ci = vk::XlibSurfaceCreateInfoKHR{{}, display, x11window};
-    surface_ = instance.createXlibSurfaceKHRUnique(ci);
+    auto surface = instance.createXlibSurfaceKHR(ci);
+#endif
+    init(instance, device, physicalDevice, graphicsQueueFamilyIndex, surface);
+  }
 #endif
 
+  Window(const vk::Instance &instance, const vk::Device &device, const vk::PhysicalDevice &physicalDevice, uint32_t graphicsQueueFamilyIndex, vk::SurfaceKHR surface) {
+    init(instance, device, physicalDevice, graphicsQueueFamilyIndex, surface);
+  }
+
+  void init(const vk::Instance &instance, const vk::Device &device, const vk::PhysicalDevice &physicalDevice, uint32_t graphicsQueueFamilyIndex, vk::SurfaceKHR surface) {
+    surface_ = vk::UniqueSurfaceKHR(surface);
+    device_ = device;
     presentQueueFamily_ = 0;
     auto &pd = physicalDevice;
     auto qprops = pd.getQueueFamilyProperties();
@@ -326,10 +332,11 @@ public:
 
     auto pms = pd.getSurfacePresentModesKHR(*surface_);
     vk::PresentModeKHR presentMode = pms[0];
-    if (std::find(pms.begin(), pms.end(), vk::PresentModeKHR::eMailbox) != pms.end()) {
-      presentMode = vk::PresentModeKHR::eMailbox;
-    } else if (std::find(pms.begin(), pms.end(), vk::PresentModeKHR::eFifo) != pms.end()) {
+    if (std::find(pms.begin(), pms.end(), vk::PresentModeKHR::eFifo) != pms.end()) {
       presentMode = vk::PresentModeKHR::eFifo;
+    } else {
+      std::cout << "No fifo mode available\n";
+      return;
     }
 
     //std::cout << "using " << vk::to_string(presentMode) << "\n";
@@ -635,8 +642,6 @@ private:
   vk::Device device_;
   bool ok_;
 };
-
-#endif // VK_NO_WINDOW
 
 } // namespace vku
 
