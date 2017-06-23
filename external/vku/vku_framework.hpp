@@ -20,6 +20,7 @@
 #define VK_USE_PLATFORM_XLIB_KHR
 #define GLFW_EXPOSE_NATIVE_X11
 #define VKU_SURFACE "VK_KHR_xlib_surface"
+#include <X11/Xlib.h>
 #endif
 
 #ifndef VKU_NO_GLFW
@@ -310,8 +311,10 @@ public:
       std::cout << "No Vulkan present queues found\n";
       return;
     }
+    printf("()\n");
 
-    auto fmts = pd.getSurfaceFormatsKHR(*surface_);
+    auto fmts = pd.getSurfaceFormatsKHR(surface);
+    printf("(%d)\n", fmts.size());
     swapchainImageFormat_ = fmts[0].format;
     swapchainColorSpace_ = fmts[0].colorSpace;
     if (fmts.size() == 1 && swapchainImageFormat_ == vk::Format::eUndefined) {
@@ -331,6 +334,7 @@ public:
     height_ = surfaceCaps.currentExtent.height;
 
     auto pms = pd.getSurfacePresentModesKHR(*surface_);
+    printf("(%d)\n", pms.size());
     vk::PresentModeKHR presentMode = pms[0];
     if (std::find(pms.begin(), pms.end(), vk::PresentModeKHR::eFifo) != pms.end()) {
       presentMode = vk::PresentModeKHR::eFifo;
@@ -339,7 +343,7 @@ public:
       return;
     }
 
-    //std::cout << "using " << vk::to_string(presentMode) << "\n";
+    std::cout << "using " << vk::to_string(presentMode) << "\n";
 
     vk::SwapchainCreateInfoKHR swapinfo{};
     std::array<uint32_t, 2> queueFamilyIndices = { graphicsQueueFamilyIndex, presentQueueFamily_ };

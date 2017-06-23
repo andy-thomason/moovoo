@@ -6,12 +6,15 @@
 //
 
 #include <Python.h>
+
+#define VK_USE_PLATFORM_XLIB_KHR
 #include <vku/vku.hpp>
 
-#define VKU_NO_WINDOW
+#define VKU_NO_GLFW
 #include <vku/vku_framework.hpp>
 
 #include <glm/glm.hpp>
+
 
 //#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 //#define GLM_FORCE_LEFT_HANDED
@@ -32,6 +35,8 @@
 #define FOUNT_NAME "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 #endif
 
+
+namespace moovoo {
 
 using mat4 = glm::mat4;
 using vec2 = glm::vec2;
@@ -1098,8 +1103,10 @@ public:
     printf("~Context\n");
   }
 
+  vk::Instance instance() const { return fw_.instance(); }
   const vk::PhysicalDeviceMemoryProperties &memprops() { return fw_.memprops(); }
   vk::Queue queue() const { return fw_.graphicsQueue(); }
+  vk::PhysicalDevice physicalDevice() const { return fw_.physicalDevice(); }
   const vk::CommandPool &commandPool() { return *commandPool_; }
   vk::Device device() { return fw_.device(); }
   uint32_t graphicsQueueFamilyIndex() { return fw_.graphicsQueueFamilyIndex(); }
@@ -1394,15 +1401,32 @@ class View : public ChildMurderer {
 public:
   View() {}
 
-  View(Context &ctxt, Model &model, uint32_t width, uint32_t height) {
+  View(Context &ctxt, uint64_t handle, Model &model, uint32_t width, uint32_t height) {
+    printf("%lx\n", handle);
     ctxt.addCM(this);
     width_ = width;
     height_ = height;
 
+    auto instance = ctxt.instance();
     auto device = ctxt.device();
     auto memprops = ctxt.memprops();
     auto graphicsQueueFamilyIndex = ctxt.graphicsQueueFamilyIndex();
     auto queue = ctxt.queue();
+    auto physicalDevice = ctxt.physicalDevice();
+
+    #ifdef VK_USE_PLATFORM_WIN32_KHR
+      auto ci = vk::Win32SurfaceCreateInfoKHR{{}, module, handle};
+      auto surface = instance.createWin32SurfaceKHR(ci);
+    #endif
+
+    #ifdef VK_USE_PLATFORM_XLIB_KHR
+      auto display = XOpenDisplay(NULL);
+      auto x11window = handle;
+      auto ci = vk::XlibSurfaceCreateInfoKHR{{}, display, x11window};
+      auto surface = instance.createXlibSurfaceKHR(ci);
+    #endif
+
+    window_ = vku::Window(instance, device, physicalDevice, graphicsQueueFamilyIndex, surface);
 
     depthStencilImage_ = vku::DepthStencilImage(device, memprops, width, height);
     colorAttachmentImage_ = vku::ColorAttachmentImage(device, memprops, width, height);
@@ -1522,6 +1546,7 @@ public:
 
     double xpos = 0, ypos = 0;
     //glfwGetCursorPos(glfwwindow_, &xpos, &ypos);
+
 
     // Trackball rotation.
     if (mouseState_.rotating) {
@@ -1729,6 +1754,8 @@ private:
   uint32_t height_;
   void *mappedTransferBuffer_;
 
+  vku::Window window_;
+
   StandardLayout standardLayout_;
   FountPipeline fountPipeline_;
 
@@ -1778,13 +1805,16 @@ private:
   std::vector<vk::UniqueEvent> pickEvents_;
 };
 
+} // namespace moovoo
+
 
 BOOST_PYTHON_MODULE(moovoo)
 {
   using namespace boost::python;
+  using namespace moovoo;
   class_<Context>("Context", init<>())
   ;
-  class_<View>("View", init<Context &, Model &, int, int>())
+  class_<View>("View", init<Context &, uint64_t, Model &, int, int>())
     .def("render", &View::render)
   ;
   class_<Model>("Model", init<Context &, boost::python::object &>())
