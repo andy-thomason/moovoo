@@ -62,7 +62,7 @@ public:
   // Construct a framework containing the instance, a device and one or more queues.
   Framework(const std::string &name) {
     std::vector<const char *> layers;
-    //layers.push_back("VK_LAYER_LUNARG_standard_validation");
+    layers.push_back("VK_LAYER_LUNARG_standard_validation");
 
     std::vector<const char *> instance_extensions;
     instance_extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
@@ -311,10 +311,8 @@ public:
       std::cout << "No Vulkan present queues found\n";
       return;
     }
-    printf("()\n");
 
     auto fmts = pd.getSurfaceFormatsKHR(surface);
-    printf("(%d)\n", fmts.size());
     swapchainImageFormat_ = fmts[0].format;
     swapchainColorSpace_ = fmts[0].colorSpace;
     if (fmts.size() == 1 && swapchainImageFormat_ == vk::Format::eUndefined) {
@@ -334,7 +332,6 @@ public:
     height_ = surfaceCaps.currentExtent.height;
 
     auto pms = pd.getSurfacePresentModesKHR(*surface_);
-    printf("(%d)\n", pms.size());
     vk::PresentModeKHR presentMode = pms[0];
     if (std::find(pms.begin(), pms.end(), vk::PresentModeKHR::eFifo) != pms.end()) {
       presentMode = vk::PresentModeKHR::eFifo;

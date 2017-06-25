@@ -18,7 +18,6 @@ include_directories(${Boost_INCLUDE_DIRS})
 link_directories(${PROJECT_SOURCE_DIR}/external/GLFW)
 link_directories(${PROJECT_SOURCE_DIR}/external/vulkan)
 
-
 add_definitions(-DSOURCE_DIR="${CMAKE_SOURCE_DIR}/")
 add_definitions(-DBINARY_DIR="${PROJECT_BINARY_DIR}/")
 
@@ -40,15 +39,17 @@ endforeach(shader)
 add_library(moovoo SHARED moovoo/main.cpp ${shaders} ../external/vku/vku.hpp)
 target_link_libraries(moovoo ${Boost_LIBRARIES})
 target_link_libraries(moovoo ${PYTHON_LIBRARIES})
-target_compile_features(moovoo PRIVATE cxx_range_for)
-SET_TARGET_PROPERTIES(moovoo PROPERTIES PREFIX "")
+target_link_libraries(moovoo glfw3)
 
 if (WIN32)
-	target_link_libraries(moovoo vulkan-1)
+  target_link_libraries(moovoo vulkan-1)
 endif()
 
 if (UNIX)
-	target_link_libraries(moovoo vulkan dl pthread)
+  target_link_libraries(moovoo vulkan dl pthread X11 Xrandr Xinerama Xcursor)
 endif()
 
-file(COPY moovoo/main.py DESTINATION ${PROJECT_BINARY_DIR})
+target_compile_features(moovoo PRIVATE cxx_range_for)
+SET_TARGET_PROPERTIES(moovoo PROPERTIES PREFIX "")
+
+
