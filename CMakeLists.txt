@@ -23,7 +23,7 @@ add_definitions(-DBINARY_DIR="${PROJECT_BINARY_DIR}/")
 
 set(CMAKE_CXX_STANDARD 11)
 
-set(shadersrc atoms.vert atoms.frag fount.vert fount.frag conns.vert conns.frag dynamics.comp skybox.vert skybox.frag)
+set(shadersrc solvent.frag solvent.vert atoms.vert atoms.frag fount.vert fount.frag conns.vert conns.frag dynamics.comp skybox.vert skybox.frag)
 
 set(shaders "")
 

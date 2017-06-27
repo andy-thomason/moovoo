@@ -108,7 +108,7 @@ public:
     dslm.buffer(4U, vk::DescriptorType::eCombinedImageSampler, vk::ShaderStageFlagBits::eAll, 1); // Cube map
     dslm.buffer(5U, vk::DescriptorType::eCombinedImageSampler, vk::ShaderStageFlagBits::eAll, 1); // Fount map
     dslm.buffer(6U, vk::DescriptorType::eStorageBuffer, vk::ShaderStageFlagBits::eAll, 1); // Instances
-    //dslm.buffer(7U, vk::DescriptorType::eStorageBuffer, vk::ShaderStageFlagBits::eAll, 1); // Solvent Acessible
+    dslm.buffer(7U, vk::DescriptorType::eStorageBuffer, vk::ShaderStageFlagBits::eAll, 1); // Solvent Acessible
     layout_ = dslm.createUnique(device);
 
     vku::PipelineLayoutMaker plm{};
@@ -398,13 +398,15 @@ public:
     int xdim = int(extent.x / grid_spacing) + 1;
     int ydim = int(extent.y / grid_spacing) + 1;
     int zdim = int(extent.z / grid_spacing) + 1;
+
+    printf("%dx%dx%d\n", xdim, ydim, zdim);
     gilgamesh::distance_field df(xdim, ydim, zdim, grid_spacing, min, pos, radii);
 
     auto &distance = df.distances();
 
     auto idx = [xdim, ydim, zdim](int x, int y, int z) { return (z * ydim + y) + xdim + x; };
 
-    /*std::vector<glm::vec3> solventAcessible;
+    std::vector<glm::vec3> solventAcessible;
     for (int z = 0; z != zdim; ++z) {
       for (int y = 0; y != ydim; ++y) {
         for (int x = 0; x != xdim; ++x) {
@@ -428,7 +430,8 @@ public:
           }
         }
       }
-    }*/
+    }
+    numSolventAcessible_ = (uint32_t)solventAcessible.size();
 
     std::vector<std::pair<int, int>> pairs;
     int prevC = -1;
@@ -536,12 +539,12 @@ public:
     pick_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer, sizeof(Pick) * Pick::fifoSize, vk::MemoryPropertyFlagBits::eHostVisible);
     conns_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(Connection) * (numConnections_+1), vk::MemoryPropertyFlagBits::eHostVisible);
     instances_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(Context) * numContexts_, vk::MemoryPropertyFlagBits::eHostVisible);
-    //solventAcessible_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(glm::vec3) * solventAcessible.size(), vk::MemoryPropertyFlagBits::eHostVisible);
+    solventAcessible_ = vku::GenericBuffer(device, memprops, buf::eStorageBuffer|buf::eTransferDst, sizeof(glm::vec3) * (solventAcessible.size()+1), vk::MemoryPropertyFlagBits::eHostVisible);
 
     atoms_.upload(device, memprops, commandPool, queue, atoms);
     conns_.upload(device, memprops, commandPool, queue, conns);
     instances_.upload(device, memprops, commandPool, queue, instances);
-    //solventAcessible_.upload(device, memprops, commandPool, queue, solventAcessible);
+    solventAcessible_.upload(device, memprops, commandPool, queue, solventAcessible);
     pAtoms_ = (Atom*)atoms_.map(device);
 
     printf("done\n");
@@ -571,8 +574,8 @@ public:
     update.image(fountSampler, fountImageView, vk::ImageLayout::eShaderReadOnlyOptimal);
     update.beginBuffers(6, 0, vk::DescriptorType::eStorageBuffer);
     update.buffer(instances_.buffer(), 0, numContexts_ * sizeof(Context));
-    //update.beginBuffers(7, 0, vk::DescriptorType::eStorageBuffer);
-    //update.buffer(solventAcessible_.buffer(), 0, solventAcessible_.size());
+    update.beginBuffers(7, 0, vk::DescriptorType::eStorageBuffer);
+    update.buffer(solventAcessible_.buffer(), 0, solventAcessible_.size());
 
     update.update(device);
   }
@@ -581,10 +584,12 @@ public:
   uint32_t numAtoms() const { return numAtoms_; }
   uint32_t numConnections() const { return numConnections_; }
   uint32_t numContexts() const { return numContexts_; }
+  uint32_t numSolventAcessible() const { return numSolventAcessible_; }
   const vku::GenericBuffer &atoms() const { return atoms_; }
   Atom *pAtoms() const { return pAtoms_; }
   const vku::GenericBuffer &pick() const { return pick_; }
   const vku::GenericBuffer &conns() const { return conns_; }
+  const vku::GenericBuffer &solventAcessible() const { return solventAcessible_; }
   const std::vector<gilgamesh::pdb_decoder::atom> &pdbAtoms() { return pdbAtoms_; }
 
   Model(const Model &rhs) {}
@@ -597,6 +602,7 @@ private:
   uint32_t numAtoms_;
   uint32_t numConnections_;
   uint32_t numContexts_;
+  uint32_t numSolventAcessible_;
   vku::GenericBuffer atoms_;
   vku::GenericBuffer pick_;
   vku::GenericBuffer conns_;
@@ -711,12 +717,19 @@ public:
     sm.mipmapMode(vk::SamplerMipmapMode::eNearest);
     cubeSampler_ = sm.createUnique(device);
 
-
     standardLayout_ = StandardLayout(device);
 
     dynamicsPipeline_ = DynamicsPipeline(device, ctxt.pipelineCache(), renderPass_, width_, height_, standardLayout_.pipelineLayout());
 
     fountPipeline_ = FountPipeline(device, ctxt.pipelineCache(), renderPass_, width_, height_, standardLayout_.pipelineLayout());
+
+    vku::PipelineMaker pm{width, height};
+    pm.topology(vk::PrimitiveTopology::ePointList);
+    pm.depthTestEnable(VK_TRUE);
+    solventPipeline_ = GraphicsPipeline(
+      device, ctxt.pipelineCache(), renderPass_, standardLayout_.pipelineLayout(),
+      BINARY_DIR "solvent.vert.spv",  BINARY_DIR "solvent.frag.spv", pm
+    );
 
     skyboxPipeline_ = GraphicsPipeline(
       device, ctxt.pipelineCache(), renderPass_, width_, height_, standardLayout_.pipelineLayout(),
@@ -924,7 +937,7 @@ public:
     cb.bindPipeline(vk::PipelineBindPoint::eGraphics, skyboxPipeline_.pipeline());
     cb.draw(6 * 6, 1, 0, 0);
 
-    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, atomPipeline_.pipeline());
+    /*cb.bindPipeline(vk::PipelineBindPoint::eGraphics, atomPipeline_.pipeline());
     if (model_.numAtoms()) cb.draw(model_.numAtoms() * 6, ninst, 0, 0);
 
     cb.bindPipeline(vk::PipelineBindPoint::eGraphics, connPipeline_.pipeline());
@@ -932,6 +945,10 @@ public:
 
     cb.bindPipeline(vk::PipelineBindPoint::eGraphics, fountPipeline_.pipeline());
     if (textModel_.numGlyphs()) cb.draw(textModel_.numGlyphs() * 6, ninst, 0, 0);
+    */
+
+    cb.bindPipeline(vk::PipelineBindPoint::eGraphics, solventPipeline_.pipeline());
+    if (model_.numSolventAcessible()) cb.draw(model_.numSolventAcessible(), 1, 0, 0);
 
     cb.endRenderPass();
 
@@ -1143,6 +1160,7 @@ private:
   GraphicsPipeline atomPipeline_;
   GraphicsPipeline connPipeline_;
   GraphicsPipeline skyboxPipeline_;
+  GraphicsPipeline solventPipeline_;
 
   TextModel textModel_;
 
